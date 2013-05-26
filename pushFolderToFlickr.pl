@@ -23,7 +23,7 @@ my $auth_token = '???';
 # Scriptname, version and process options.
 my $version = "1.1";
 my $tries = 10;
-my $debug = 1;
+my $debug = 0;
 
 ### MAIN ###
 if ( $auth_key eq "???" || $auth_secret eq "???" || $auth_token eq "???" )
@@ -64,6 +64,7 @@ my $api = new Flickr::API({
    'unicode' => 1
 });
 my $response = flickrCall('flickr.people.getUploadStatus', {} );
+if (! $response ) { exit -1; }
 
 if ( $quiet == 0 ) { print "pushFolderToFlickr - V". $version ."\n\n"; }
 if ( $quiet == 0 ) { print "Bandwidth summary:\n"; }
@@ -233,55 +234,20 @@ sub rollback()
    if ( $setid != "" )
    {
       print "   Deleting photoset: $setname\n";
-      $loop = 1;
-      do
-      {
-         $response = $api->execute_method(
-            'flickr.photosets.delete', {
-            'api_key' => $auth_key,
-            'auth_token' => $auth_token,
-            'photoset_id' => $setid
-         });
-         if ( $response->{success} != 1 )
-         {  
-            print "ERROR: Could not delete photoset: $setid! (Try $loop)\n";
-            print    "( ". $response->{error_message} ." )\n";
-            $loop++;
-         } else 
-         {
-            if ( $loop > 1 ) { print "Photoset deleted. (Try $loop)\n"; }
-            $loop = 99;
-         }
-      } while ( $loop < $tries+1 );
+      my $response = flickrCall('flickr.photosets.delete', {
+         'photoset_id' => $setid
+      });
    }
 
-   # Delete photos via already uploaded ids.
+   # Delete already uploaded photos.
    if ( @photoids > 0 )
    {
       foreach my $image ( @photoids )
       {
          print "   Deleting imageid: $image\n";
-         $loop = 1;
-         do
-         {
-            $response = $api->execute_method(
-               'flickr.photos.delete', {
-               'api_key' => $auth_key,
-               'api_secret' => $auth_secret,
-               'auth_token' => $auth_token,
-               'photo_id' => $image 
-            });
-            if ( $response->{success} != 1 )
-            {
-               print "ERROR: Could not delete imageid: $image! (Try $loop)\n";
-               print    "( ". $response->{error_message} ." )\n";
-               $loop++;
-            } else
-            {
-               if ( $loop > 1 ) { print "Deleted imageid: $image. (Try $loop)\n"; }
-               $loop = 99;
-            }
-         } while ( $loop < $tries+1 );
+         my $response = flickrCall('flickr.photos.delete', {
+            'photo_id' => $image
+         });
       }
    }
    exit -1;
