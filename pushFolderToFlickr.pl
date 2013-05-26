@@ -6,6 +6,8 @@
 #        http://blog.schmidt.ps
 #
 
+use lib "/home/sascha/dev/flickr/perl-Flickr-API/lib";
+
 use strict; 
 use Flickr::Upload; 
 use Flickr::API 1.07;
@@ -13,18 +15,23 @@ use Data::Dumper;
 use File::Basename;
 use Encode;
 
-# Flickr API authentication credentials. 
-my $auth_key = '?';
-my $auth_secret = '?';
-my $auth_token = '?';
+# Flickr authentication credentials. 
+my $auth_key = '???';
+my $auth_secret = '???';
+my $auth_token = '???';
 
-# Scriptname and version.
+# Scriptname, version and process options.
 my $version = "1.1";
-my $app_title = "Flickr::Upload::pushFolderToFlickr/$version";
 my $tries = 10;
-my $debug = 0;
+my $debug = 1;
 
 ### MAIN ###
+if ( $auth_key eq "???" || $auth_secret eq "???" || $auth_token eq "???" )
+{
+   print "ERROR: Script not configured correctly. Please apply for a flickr api key.\n";
+   exit -1;
+}
+
 if ( @ARGV == 0 )
 {
    print "ERROR: No arguments given!\n";
@@ -38,6 +45,7 @@ if ( @ARGV[1] eq "-q" )
    $quiet = 1;
 }
 
+# Prepare some global variables.
 my $dir = @ARGV[0];
 my $setname = basename($dir);
 utf8::decode($setname);
@@ -47,25 +55,15 @@ my $ua = Flickr::Upload->new({
    'key' => $auth_key,
    'secret' => $auth_secret
 }); 
-$ua->agent($app_title); 
+$ua->agent("Flickr::Upload::pushFolderToFlickr/$version"); 
 
-# Initialize flickr-module.
+# Initialize flickr core module.
 my $api = new Flickr::API({
    'key' => $auth_key,
    'secret' => $auth_secret,
    'unicode' => 1
 });
-my $response = $api->execute_method(
-   'flickr.people.getUploadStatus', {
-   'api_key' => $auth_key,
-   'auth_token' => $auth_token,
-});
-if ( $response->{success} != 1 )
-{
-   print "ERROR: Could not fetch upload status!\n";
-   print    "( ". $response->{error_message} ." )\n";
-   exit -1;
-}
+my $response = flickrCall('flickr.people.getUploadStatus', {} );
 
 if ( $quiet == 0 ) { print "pushFolderToFlickr - V". $version ."\n\n"; }
 if ( $quiet == 0 ) { print "Bandwidth summary:\n"; }
@@ -73,7 +71,66 @@ if ( $quiet == 0 ) { print "   Remaining KB: ". $response->{tree}->{children}->[
 if ( $quiet == 0 ) { print "   Used KB     : ". $response->{tree}->{children}->[1]->{children}->[3]->{attributes}->{usedkb} ."\n"; }
 if ( $quiet == 0 ) { print "   Max KB      : ". $response->{tree}->{children}->[1]->{children}->[3]->{attributes}->{maxkb} ."\n\n"; }
 
+# Start main engine.
 upload_folder(); 
+
+###
+### Some usefull helper functions.
+###
+
+# This function executes the api call and handles errors.
+# It will return "undef" if the api call could not be completed.
+sub flickrCall
+{
+   my $cmd = shift;
+   my $cmdargs = shift;
+   my $args;
+
+   my $authargs = {
+      'api_key' => $auth_key,
+      'auth_token' => $auth_token,
+   }; 
+
+   # Merge args
+   foreach ( keys $authargs )
+   {
+      $args->{$_} = $authargs->{$_};
+   }
+   foreach ( keys $cmdargs )
+   {
+      $args->{$_} = $cmdargs->{$_};
+   }
+
+   # Execute API call.
+   my $response;
+   my $loop = 1;
+   do
+   {
+      $response = $api->execute_method(
+         $cmd, $args
+      );
+
+      if ( $response->{success} != 1 )
+      {
+         print "ERROR: API returned error for call: $cmd!\n";
+         print    "( ". $response->{error_message} ." )\n";
+         #sleep(10);
+         $loop++;
+      } else
+      {
+         if ( $loop > 1 ) { print "API call: $cmd successfully finished. (Try $loop)\n"; }
+         $loop = 99;
+      }
+   } while ( $loop < $tries+1 );
+
+   # Return undef if we could not complete the api call.
+   if ( $loop == $tries+1 )
+   {
+      return undef;
+   }
+
+   return $response;
+}
 
 sub upload_folder() 
 {
@@ -142,31 +199,13 @@ sub addPicturesToPhotoset()
 {
    my ($setname, @photoids) = @_; 
    my $setid;
-   my $response;
 
-   my $loop = 1;
-   do
-   {
-      $response = $api->execute_method(
-         'flickr.photosets.create', {
-         'api_key' => $auth_key,
-         'auth_token' => $auth_token,
-         'title' => $setname,
-         'primary_photo_id' => @photoids[0] 
-      });
-
-      if ( $response->{success} != 1 )
-      {
-         print "ERROR: Could not create photoset! (Try $loop)\n";
-         print    "( ". $response->{error_message} ." )\n";
-         $loop++;
-         if ( $loop == $tries+1 ) { rollback($setname, "", @photoids); exit -1; }
-      } else
-      {
-         if ( $loop > 1 ) { print "Photoset created. (Try $loop)\n"; }
-         $loop = 99;
-      }
-   } while ( $loop < $tries+1 );
+   # Create photoset.
+   my $response = flickrCall('flickr.photosets.create', { 
+      'title' => $setname,
+      'primary_photo_id' => @photoids[0]
+   });
+   if (! $response ) { rollback($setname, "", @photoids); }
 
    $setid = $response->{tree}->{children}->[1]->{attributes}->{id};
 
@@ -174,28 +213,8 @@ sub addPicturesToPhotoset()
    {
       if ( $item != @photoids[0] )
       {
-         $loop = 1;
-         do
-         { 
-            $response = $api->execute_method(
-               'flickr.photosets.addPhoto', {
-               'api_key' => $auth_key,
-               'auth_token' => $auth_token,
-               'photoset_id' => $setid,
-               'photo_id' => $item 
-            });
-            if ( $response->{success} != 1 )
-            {
-               print "ERROR: Could not add photo $item to photoset! (Try $loop)\n";
-               print    "( ". $response->{error_message} ." )\n";
-               $loop++;
-               if ( $loop == $tries+1 ) { rollback($setname, $setid, @photoids); exit -1; }
-            } else
-            {
-               if ( $loop > 1 ) { print "Added photo $item to photoset. (Try $loop)\n"; }
-               $loop = 99;
-            }
-         } while ( $loop < $tries+1 );
+         $response = flickrCall('flickr.photosets.addPhoto', { 'photoset_id' => $setid,'photo_id' => $item });
+         if (! $response ) { rollback($setname, $setid, @photoids); }
       }
    }
    if ( $debug == 1 ) { rollback($setname, $setid, @photoids); }
@@ -265,4 +284,5 @@ sub rollback()
          } while ( $loop < $tries+1 );
       }
    }
+   exit -1;
 }
