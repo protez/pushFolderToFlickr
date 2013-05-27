@@ -63,7 +63,7 @@ my $api = new Flickr::API({
    'secret' => $auth_secret,
    'unicode' => 1
 });
-my $response = flickrCall('flickr.people.getUploadStatus', {} );
+my $response = flickrApiCall('flickr.people.getUploadStatus', {} );
 if (! $response ) { exit -1; }
 
 if ( $quiet == 0 ) { print "pushFolderToFlickr - V". $version ."\n\n"; }
@@ -73,7 +73,7 @@ if ( $quiet == 0 ) { print "   Used KB     : ". $response->{tree}->{children}->[
 if ( $quiet == 0 ) { print "   Max KB      : ". $response->{tree}->{children}->[1]->{children}->[3]->{attributes}->{maxkb} ."\n\n"; }
 
 # Start main engine.
-upload_folder(); 
+uploadFoolderToFlickr(); 
 
 ###
 ### Some usefull helper functions.
@@ -81,7 +81,7 @@ upload_folder();
 
 # This function executes the api call and handles errors.
 # It will return "undef" if the api call could not be completed.
-sub flickrCall
+sub flickrApiCall
 {
    my $cmd = shift;
    my $cmdargs = shift;
@@ -133,7 +133,9 @@ sub flickrCall
    return $response;
 }
 
-sub upload_folder() 
+# This is the main function of this script. It uploads images to flickr and adds them
+# to a photoset.
+sub uploadFolderToFlickr() 
 {
    my @photoids = ();        
    my $resp;
@@ -196,13 +198,15 @@ sub upload_folder()
    return; 
 }
 
+# This function is called by uploadFolderToFlicker to add images to a given photoset.
+# The photoset will be created if it doesn't exist.
 sub addPicturesToPhotoset()
 {
    my ($setname, @photoids) = @_; 
    my $setid;
 
    # Create photoset.
-   my $response = flickrCall('flickr.photosets.create', { 
+   my $response = flickrApiCall('flickr.photosets.create', { 
       'title' => $setname,
       'primary_photo_id' => @photoids[0]
    });
@@ -214,13 +218,16 @@ sub addPicturesToPhotoset()
    {
       if ( $item != @photoids[0] )
       {
-         $response = flickrCall('flickr.photosets.addPhoto', { 'photoset_id' => $setid,'photo_id' => $item });
+         $response = flickrApiCall('flickr.photosets.addPhoto', { 'photoset_id' => $setid,'photo_id' => $item });
          if (! $response ) { rollback($setname, $setid, @photoids); }
       }
    }
    if ( $debug == 1 ) { rollback($setname, $setid, @photoids); }
 }
 
+# At a strange api behaviour or some not correctable errors, the script will rollback
+# the actions done before. So there won't be any inconsistency (uploaded images and
+# photosets).
 sub rollback()
 {
    my ($setname, $setid, @photoids) = @_;
@@ -234,7 +241,7 @@ sub rollback()
    if ( $setid != "" )
    {
       print "   Deleting photoset: $setname\n";
-      my $response = flickrCall('flickr.photosets.delete', {
+      my $response = flickrApiCall('flickr.photosets.delete', {
          'photoset_id' => $setid
       });
    }
@@ -245,7 +252,7 @@ sub rollback()
       foreach my $image ( @photoids )
       {
          print "   Deleting imageid: $image\n";
-         my $response = flickrCall('flickr.photos.delete', {
+         my $response = flickrApiCall('flickr.photos.delete', {
             'photo_id' => $image
          });
       }
