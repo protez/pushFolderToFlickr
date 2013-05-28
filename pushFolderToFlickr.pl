@@ -289,11 +289,14 @@ sub getPhotosetId
 {
    my $photosetname = shift;
 
-   foreach ( keys $photosetlist )
+   if ( $photosetlist )
    {
-      if ( $photosetlist->{$_} eq $photosetname )
+      foreach ( keys $photosetlist )
       {
-         return $_;
+         if ( $photosetlist->{$_} eq $photosetname )
+         {
+            return $_;
+         }
       }
    }
    return undef;
@@ -341,11 +344,14 @@ sub photoAlreadyExistsWithinPhotoset
 {
    my $imagename = shift;
 
-   foreach ( keys $photolist )
+   if ( $photolist )
    {
-      if ( lc($imagename) eq lc($photolist->{$_}) )
+      foreach ( keys $photolist )
       {
-         return 1;
+         if ( lc($imagename) eq lc($photolist->{$_}) )
+         {
+            return 1;
+         }
       }
    }
    return undef;
