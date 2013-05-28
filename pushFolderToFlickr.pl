@@ -6,14 +6,13 @@
 #        http://blog.schmidt.ps
 #
 
-use lib "/home/sascha/dev/flickr/perl-Flickr-API/lib";
-
 use strict; 
 use Flickr::Upload; 
 use Flickr::API 1.07;
 use Data::Dumper;
 use File::Basename;
 use Encode;
+use XML::LibXML;
 
 # Flickr authentication credentials. 
 my $auth_key = '???';
@@ -23,6 +22,7 @@ my $auth_token = '???';
 # Scriptname, version and process options.
 my $version = "1.1";
 my $tries = 10;
+my $sleeponfail = 60;
 my $debug = 0;
 
 ### MAIN ###
@@ -48,7 +48,6 @@ if ( @ARGV[1] eq "-q" )
 # Prepare some global variables.
 my $dir = @ARGV[0];
 my $setname = basename($dir);
-utf8::decode($setname);
 
 # Initialize upload-module.
 my $ua = Flickr::Upload->new({
@@ -63,6 +62,8 @@ my $api = new Flickr::API({
    'secret' => $auth_secret,
    'unicode' => 1
 });
+
+# Show some account stats.
 my $response = flickrApiCall('flickr.people.getUploadStatus', {} );
 if (! $response ) { exit -1; }
 
@@ -72,8 +73,21 @@ if ( $quiet == 0 ) { print "   Remaining KB: ". $response->{tree}->{children}->[
 if ( $quiet == 0 ) { print "   Used KB     : ". $response->{tree}->{children}->[1]->{children}->[3]->{attributes}->{usedkb} ."\n"; }
 if ( $quiet == 0 ) { print "   Max KB      : ". $response->{tree}->{children}->[1]->{children}->[3]->{attributes}->{maxkb} ."\n\n"; }
 
+# Fetch some data to coordinate uploads and photoset creation.
+my $photosetlist = flickrGetPhotosets();
+my $setExists = 0;
+my $setid = getPhotosetId($setname);
+my $photolist;
+if ( $setid )
+{
+   if ( $quiet == 0 ) { print "Photoset already exists (ID $setid)\n"; }
+   $photolist = flickrGetPhotosOfPhotoset($setid);
+   $setExists = 1;
+}
+utf8::decode($setname);
+
 # Start main engine.
-uploadFoolderToFlickr(); 
+uploadFolderToFlickr(); 
 
 ###
 ### Some usefull helper functions.
@@ -115,7 +129,7 @@ sub flickrApiCall
       {
          print "ERROR: API returned error for call: $cmd!\n";
          print    "( ". $response->{error_message} ." )\n";
-         #sleep(10);
+         sleep($sleeponfail);
          $loop++;
       } else
       {
@@ -135,7 +149,7 @@ sub flickrApiCall
 
 # This is the main function of this script. It uploads images to flickr and adds them
 # to a photoset.
-sub uploadFolderToFlickr() 
+sub uploadFolderToFlickr
 {
    my @photoids = ();        
    my $resp;
@@ -151,6 +165,14 @@ sub uploadFolderToFlickr()
       {
          my(undef, undef, $ext) = fileparse($image,qr{\..*});
          $ext = lc($ext);
+
+         my $tmp = $image;
+         $tmp =~ s/\..*$//;
+         if ( photoAlreadyExistsWithinPhotoset($tmp) )
+         {
+            if ( $quiet == 0 ) { print "Photo $image already exists within photoset...\n"; }
+            next;
+         }  
 
          if ($image ne "." && $image ne ".." && ! -d $image &&
             ($ext eq ".jpg" || $ext eq ".png" || $ext eq ".gif") )
@@ -192,7 +214,7 @@ sub uploadFolderToFlickr()
       if ( $uploadcount > 0 )
       {
          print "Upload finished for directory: $dir\n";
-         addPicturesToPhotoset($setname, @photoids);
+         flickrAddPicturesToPhotoset($setname, @photoids);
       }
    } 
    return; 
@@ -200,37 +222,141 @@ sub uploadFolderToFlickr()
 
 # This function is called by uploadFolderToFlicker to add images to a given photoset.
 # The photoset will be created if it doesn't exist.
-sub addPicturesToPhotoset()
+sub flickrAddPicturesToPhotoset
 {
    my ($setname, @photoids) = @_; 
-   my $setid;
 
-   # Create photoset.
-   my $response = flickrApiCall('flickr.photosets.create', { 
-      'title' => $setname,
-      'primary_photo_id' => @photoids[0]
-   });
-   if (! $response ) { rollback($setname, "", @photoids); }
-
-   $setid = $response->{tree}->{children}->[1]->{attributes}->{id};
+   # Create photoset if it doesn't already exists.
+   if (! $setid )
+   { 
+      my $response = flickrApiCall('flickr.photosets.create', { 
+         'title' => $setname,
+         'primary_photo_id' => @photoids[0]
+      });
+      if (! $response ) { rollback($setname, "", @photoids); }
+      $setid = $response->{tree}->{children}->[1]->{attributes}->{id};
+   }
 
    foreach my $item (@photoids)
    {
       if ( $item != @photoids[0] )
       {
+         print "Adding $item to $setid\n";
          $response = flickrApiCall('flickr.photosets.addPhoto', { 'photoset_id' => $setid,'photo_id' => $item });
-         if (! $response ) { rollback($setname, $setid, @photoids); }
+         if (! $response ) { rollback($setname, @photoids); }
       }
    }
-   if ( $debug == 1 ) { rollback($setname, $setid, @photoids); }
+   if ( $debug == 1 ) { rollback($setname, @photoids); }
+}
+
+# This function fetches the complete list of photosets.
+sub flickrGetPhotosets
+{
+   my $items;
+   my $page = 1;
+   my $pages = 1;
+
+   do
+   {
+      my $response = flickrApiCall('flickr.photosets.getList', { 'page' => $page} );
+      if (! $response ) { exit -1; }
+
+      my $buffer  = $response->content;
+      my $content = Compress::Zlib::memGunzip($buffer);
+      my $parser = XML::LibXML->new();
+      my $info = $parser->parse_string($content);
+
+      my $nodes = $info->findnodes('/rsp/photosets');
+      $pages = $nodes->[0]->findvalue('@pages');
+
+      my $photosetNodes = $info->findnodes('//photoset');
+
+      # Copy result into id-array.
+      foreach my $node ( @{$photosetNodes} )
+      {
+         my $title = $node->getChildrenByTagName('title');
+         utf8::encode($title);
+         $items->{$node->getAttribute('id')} = $title;
+      }
+      $page++;
+   } while ( $page <= $pages );
+
+   return $items;
+}
+
+# After fetching a list of photosets this function finds the id of a given photoset.
+sub getPhotosetId
+{
+   my $photosetname = shift;
+
+   foreach ( keys $photosetlist )
+   {
+      if ( $photosetlist->{$_} eq $photosetname )
+      {
+         return $_;
+      }
+   }
+   return undef;
+}
+
+# After looking up a photoset id, this function returns the list of images within this photoset.
+sub flickrGetPhotosOfPhotoset()
+{
+   my $photosetid = shift;
+   my $items;
+   my $page = 1;
+   my $pages = 1;
+
+   do
+   {
+      my $response = flickrApiCall('flickr.photosets.getPhotos', {
+         'photoset_id' => $photosetid,
+         'page' => $page,
+      });
+      if (! $response ) { exit -1; }
+
+      my $buffer  = $response->content;
+      my $content = Compress::Zlib::memGunzip($buffer);
+      my $parser = XML::LibXML->new();
+      my $info = $parser->parse_string($content);
+
+      my $nodes = $info->findnodes('/rsp/photoset');
+      $pages = $nodes->[0]->findvalue('@pages');
+
+      my $photoNodes = $info->findnodes('//photo');
+
+      foreach my $node ( @{$photoNodes} )
+      {
+         $items->{$node->getAttribute('id')} = $node->getAttribute('title');
+      } 
+      $page++;
+
+   } while ( $page <= $pages );
+
+   return $items;
+}
+
+# Check wether the given photo already exists within the photoset (with id).
+sub photoAlreadyExistsWithinPhotoset
+{
+   my $imagename = shift;
+
+   foreach ( keys $photolist )
+   {
+      if ( lc($imagename) eq lc($photolist->{$_}) )
+      {
+         return 1;
+      }
+   }
+   return undef;
 }
 
 # At a strange api behaviour or some not correctable errors, the script will rollback
 # the actions done before. So there won't be any inconsistency (uploaded images and
 # photosets).
-sub rollback()
+sub rollback
 {
-   my ($setname, $setid, @photoids) = @_;
+   my ($setname, @photoids) = @_;
    utf8::encode($setname);
    my $response;
    my $loop;
@@ -238,7 +364,7 @@ sub rollback()
    print "Rollback for: $setname\n";
 
    # Delete photoset.
-   if ( $setid != "" )
+   if ( $setExists == 0 )
    {
       print "   Deleting photoset: $setname\n";
       my $response = flickrApiCall('flickr.photosets.delete', {
