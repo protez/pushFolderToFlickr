@@ -190,6 +190,7 @@ sub uploadFolderToFlickr
                if (! $resp )
                {
                   print "ERROR: Failed to upload: $image (Try $loop)\n";
+                  sleep($sleeponfail);
                   $loop++;
                   if ( $loop == $tries+1 ) { rollback($setname, "", @photoids); exit -1; } 
                } else
@@ -241,7 +242,6 @@ sub flickrAddPicturesToPhotoset
    {
       if ( $item != @photoids[0] )
       {
-         print "Adding $item to $setid\n";
          $response = flickrApiCall('flickr.photosets.addPhoto', { 'photoset_id' => $setid,'photo_id' => $item });
          if (! $response ) { rollback($setname, @photoids); }
       }
