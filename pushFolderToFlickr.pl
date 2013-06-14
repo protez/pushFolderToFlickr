@@ -22,7 +22,7 @@ my $auth_token = '???';
 # Scriptname, version and process options.
 my $version = "1.1";
 my $tries = 10;
-my $sleeponfail = 60;
+my $sleeponfail = 10;
 my $debug = 0;
 
 ### MAIN ###
@@ -131,6 +131,13 @@ sub flickrApiCall
          print    "( ". $response->{error_message} ." )\n";
          sleep($sleeponfail);
          $loop++;
+
+         # Re-Initialize flickr core module due to errors.
+         $api = new Flickr::API({
+            'key' => $auth_key,
+            'secret' => $auth_secret,
+            'unicode' => 1
+         });
       } else
       {
          if ( $loop > 1 ) { print "API call: $cmd successfully finished. (Try $loop)\n"; }
@@ -163,11 +170,10 @@ sub uploadFolderToFlickr
       my $uploadcount = 0;
       foreach my $image (sort readdir(DIR)) 
       {
-         my(undef, undef, $ext) = fileparse($image,qr{\..*});
+         my $ext = substr $image, -4;
          $ext = lc($ext);
 
-         my $tmp = $image;
-         $tmp =~ s/\..*$//;
+         my $tmp = substr $image, 0, length($image)-4;
          if ( photoAlreadyExistsWithinPhotoset($tmp) )
          {
             if ( $quiet == 0 ) { print "Photo $image already exists within photoset...\n"; }
