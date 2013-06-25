@@ -181,7 +181,8 @@ sub uploadFolderToFlickr
          }  
 
          if ($image ne "." && $image ne ".." && ! -d $image &&
-            ($ext eq ".jpg" || $ext eq ".png" || $ext eq ".gif") )
+            ($ext eq ".jpg" || $ext eq ".png" || $ext eq ".gif" ||
+             $ext eq ".mov" || $ext eq ".mpg" || $ext eq ".mpeg" || $ext eq ".avi" ) )
          {
             my $file = $dir ."/". $image; 
 
@@ -209,6 +210,7 @@ sub uploadFolderToFlickr
                         print "Finished upload: $image (Try $loop)\n";
                      }
                   }
+
                   push(@photoids, $resp);
                   $uploadcount++;
                   $loop = 99;
@@ -233,6 +235,13 @@ sub flickrAddPicturesToPhotoset
 {
    my ($setname, @photoids) = @_; 
 
+   # Check wether we have to handle an existing photoset or not.
+   my $photosetexists = 1; 
+   if (! $setid )
+   {
+      $photosetexists = 0;
+   }
+ 
    # Create photoset if it doesn't already exists.
    if (! $setid )
    { 
@@ -246,7 +255,7 @@ sub flickrAddPicturesToPhotoset
 
    foreach my $item (@photoids)
    {
-      if ( $item != @photoids[0] )
+      if ( $item != @photoids[0] || $photosetexists == 1 )
       {
          $response = flickrApiCall('flickr.photosets.addPhoto', { 'photoset_id' => $setid,'photo_id' => $item });
          if (! $response ) { rollback($setname, @photoids); }
